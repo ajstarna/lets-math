@@ -12,6 +12,7 @@ dependencies = [
     "peft>=0.21.0",
     "python-dotenv>=1.2.3",
     "torch==2.11.0",
+    "trl>=0.20.0",
     "tqdm>=4.70.0",
     "transformers>=5.16.1",
     "wandb>=0.30.0",

@@ -21,5 +21,8 @@ data/
 # Experiment tracking
 wandb/
 
+# Local agent guidance
+AGENTS.md
+
 # Editor backups
 *~
