@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+
+# Local secrets/config
+.env
+.env.*
+!.env.example
+
+# Training artifacts and datasets
+outputs/
+data/
+
+# Experiment tracking
+wandb/
+
+# Editor backups
+*~

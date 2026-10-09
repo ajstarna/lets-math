@@ -1,0 +1,40 @@
+[project]
+name = "lets-math"
+version = "0.1.0"
+description = "A small SFT and GRPO study on verifiable math problems"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [
+    { name = "Adam St Arnaud" },
+]
+dependencies = [
+    "datasets>=5.0.1",
+    "peft>=0.21.0",
+    "python-dotenv>=1.2.3",
+    "torch==2.11.0",
+    "tqdm>=4.70.0",
+    "transformers>=5.16.1",
+    "wandb>=0.30.0",
+]
+
+[project.scripts]
+lets-math = "lets_math.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
