@@ -2,6 +2,8 @@
 
 A small, reproducible study of supervised fine-tuning (SFT) and Group Relative Policy Optimization (GRPO) on math problems with deterministic answer verification.
 
+See [RESULTS.md](RESULTS.md) for the running experiment record.
+
 ## Research question
 
 How much does outcome-supervised GRPO improve a small Qwen model over its base and SFT-only baselines, and does that improvement survive controlled distribution shifts?
