@@ -226,7 +226,7 @@ def _print_example(index: int, example: EvaluationExample) -> None:
 
 def run(args: Namespace) -> None:
     """CLI entry point for deterministic GSM8K evaluation."""
-    from .main import load_experiment_dataset
+    from .data import load_experiment_dataset
 
     datasets = load_experiment_dataset(args)
     if args.split not in datasets:

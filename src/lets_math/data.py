@@ -60,7 +60,7 @@ def load_experiment_dataset(args: Namespace) -> DatasetDict:
     )
 
 
-def run(args: Namespace) -> None:
+def inspect_data(args: Namespace) -> None:
     """Load a dataset, create an experiment split, and display examples."""
     if args.examples < 0:
         raise ValueError("--examples must be >= 0")

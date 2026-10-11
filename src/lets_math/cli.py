@@ -2,7 +2,7 @@
 
 import argparse
 
-from . import evaluate, main as data_main, sft
+from . import data, evaluate, sft
 
 
 DEFAULT_DATASET = "openai/gsm8k"
@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Load --model's tokenizer and report SFT sequence-length statistics",
     )
-    inspect_parser.set_defaults(func=data_main.run)
+    inspect_parser.set_defaults(func=data.inspect_data)
 
     sft_parser = subparsers.add_parser("train-sft", help="Run raw-PyTorch LoRA supervised fine-tuning")
     _add_data_arguments(sft_parser)
