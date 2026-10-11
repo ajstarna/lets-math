@@ -93,6 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate_parser.add_argument("--max-new-tokens", type=int, default=256)
     evaluate_parser.add_argument("--generation-batch-size", type=int, default=8)
     evaluate_parser.add_argument("--show-examples", type=int, default=3)
+    evaluate_parser.add_argument(
+        "--output-json", default=None, help="Optional path for metrics and per-example results"
+    )
     evaluate_parser.set_defaults(func=evaluate.run)
     return parser
 

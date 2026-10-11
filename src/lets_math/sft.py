@@ -3,9 +3,11 @@
 from argparse import Namespace
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict, dataclass
+import json
 import math
 from pathlib import Path
 import random
+from time import perf_counter
 from typing import Any
 
 import torch
@@ -252,6 +254,23 @@ def _infinite_train_batches(
         batch_offset = 0
 
 
+def _append_metric(output_dir: str | None, record: dict[str, Any]) -> None:
+    """Append one machine-readable training event when local output is enabled."""
+    if output_dir is None:
+        return
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    with (output_path / "metrics.jsonl").open("a") as file:
+        file.write(json.dumps(record) + "\n")
+
+
+def _write_summary(output_dir: str | None, summary: dict[str, Any]) -> None:
+    if output_dir is not None:
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        (output_path / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+
 def _save_adapter(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizerBase,
@@ -443,9 +462,14 @@ def train_sft(
                 model, tokenizer, optimizer, config.output_dir, 0, 0, 0,
                 config.seed, best_validation_loss, best_generation_accuracy,
             )
+        _append_metric(
+            config.output_dir,
+            {"step": 0, "event": "validation", "loss": best_validation_loss},
+        )
         if wandb_run is not None:
             wandb_run.log({"validation/loss": best_validation_loss}, step=0)
 
+    run_start = perf_counter()
     model.train()
     optimizer.zero_grad(set_to_none=True)
     batches = _infinite_train_batches(
@@ -467,6 +491,10 @@ def train_sft(
 
         if step % config.log_every == 0:
             print(f"SFT step {step}/{config.max_steps}: train loss {mean_train_loss:.4f}")
+            _append_metric(
+                config.output_dir,
+                {"step": step, "event": "train", "loss": mean_train_loss},
+            )
             if wandb_run is not None:
                 wandb_run.log({"train/loss": mean_train_loss}, step=step)
 
@@ -479,6 +507,10 @@ def train_sft(
                 best_validation_loss = validation_loss
                 if config.output_dir is not None:
                     _save_best_checkpoint(model, tokenizer, config.output_dir)
+            _append_metric(
+                config.output_dir,
+                {"step": step, "event": "validation", "loss": validation_loss},
+            )
             if wandb_run is not None:
                 wandb_run.log({"validation/loss": validation_loss}, step=step)
 
@@ -491,6 +523,10 @@ def train_sft(
                 best_generation_accuracy = accuracy
                 if config.output_dir is not None:
                     _save_best_accuracy_checkpoint(model, tokenizer, config.output_dir)
+            _append_metric(
+                config.output_dir,
+                {"step": step, "event": "generation_validation", "accuracy": accuracy},
+            )
             if wandb_run is not None:
                 wandb_run.log({"generation/accuracy": accuracy}, step=step)
 
@@ -501,6 +537,13 @@ def train_sft(
                     batch_offset, config.seed, best_validation_loss, best_generation_accuracy,
                 )
 
+    summary = {
+        "final_step": config.max_steps,
+        "best_validation_loss": best_validation_loss,
+        "best_generation_accuracy": best_generation_accuracy,
+        "runtime_seconds": perf_counter() - run_start,
+    }
+    _write_summary(config.output_dir, summary)
     if wandb_run is not None:
         wandb_run.summary["validation/best_loss"] = best_validation_loss
         wandb_run.summary["generation/best_accuracy"] = best_generation_accuracy
@@ -530,6 +573,11 @@ def run(args: Namespace) -> None:
         generation_max_new_tokens=args.generation_max_new_tokens,
         generation_batch_size=args.generation_batch_size,
     )
+    if config.output_dir is not None:
+        output_path = Path(config.output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        (output_path / "config.json").write_text(json.dumps(asdict(config), indent=2) + "\n")
+
     # LoRA parameters are initialized during model loading, so seed beforehand.
     torch.manual_seed(config.seed)
     if torch.cuda.is_available():

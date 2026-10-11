@@ -2,6 +2,8 @@
 
 from argparse import Namespace
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from statistics import mean
 
 import torch
@@ -30,6 +32,7 @@ class EvaluationExample:
     completion: str
     score: ScoredCompletion
     completion_tokens: int
+    was_truncated: bool
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,41 @@ class EvaluationResult:
     @property
     def mean_completion_tokens(self) -> float:
         return mean(example.completion_tokens for example in self.examples)
+
+    @property
+    def truncation_rate(self) -> float:
+        return mean(example.was_truncated for example in self.examples)
+
+    def to_dict(self) -> dict:
+        return {
+            "metrics": {
+                "examples": len(self.examples),
+                "exact_answer_accuracy": self.accuracy,
+                "correct_answers": sum(example.score.is_correct for example in self.examples),
+                "valid_format_rate": self.format_rate,
+                "valid_format_answers": sum(
+                    example.score.has_valid_format for example in self.examples
+                ),
+                "mean_completion_tokens": self.mean_completion_tokens,
+                "truncation_rate": self.truncation_rate,
+                "truncated_completions": sum(
+                    example.was_truncated for example in self.examples
+                ),
+            },
+            "examples": [
+                {
+                    "question": example.question,
+                    "completion": example.completion,
+                    "expected_answer": example.score.expected_answer,
+                    "predicted_answer": example.score.predicted_answer,
+                    "has_valid_format": example.score.has_valid_format,
+                    "is_correct": example.score.is_correct,
+                    "completion_tokens": example.completion_tokens,
+                    "was_truncated": example.was_truncated,
+                }
+                for example in self.examples
+            ],
+        }
 
 
 def score_completion(completion: str, gold_solution: str) -> ScoredCompletion:
@@ -97,8 +135,8 @@ def generate_completions(
     tokenizer: PreTrainedTokenizerBase,
     prompts: list[str],
     max_new_tokens: int,
-) -> list[tuple[str, int]]:
-    """Greedily generate completion-only text for a left-padded prompt batch."""
+) -> list[tuple[str, int, bool]]:
+    """Greedily generate text, token length, and truncation status for a prompt batch."""
     if not prompts:
         return []
 
@@ -118,13 +156,19 @@ def generate_completions(
 
     completions = []
     for sequence in generated_ids:
-        completion_ids = sequence[input_width:].tolist()
+        raw_completion_ids = sequence[input_width:].tolist()
+        emitted_eos = tokenizer.eos_token_id in raw_completion_ids
+        completion_ids = list(raw_completion_ids)
         # Generation pads shorter completed sequences to the batch's longest
         # sequence. Exclude that padding (and a terminal EOS when EOS is pad).
         while completion_ids and completion_ids[-1] == tokenizer.pad_token_id:
             completion_ids.pop()
         completions.append(
-            (tokenizer.decode(completion_ids, skip_special_tokens=True), len(completion_ids))
+            (
+                tokenizer.decode(completion_ids, skip_special_tokens=True),
+                len(completion_ids),
+                not emitted_eos,
+            )
         )
     return completions
 
@@ -151,7 +195,7 @@ def evaluate_gsm8k(
             for question, answer in zip(rows["question"], rows["answer"], strict=True)
         ]
         completions = generate_completions(model, tokenizer, prompts, max_new_tokens)
-        for question, answer, (completion, completion_tokens) in zip(
+        for question, answer, (completion, completion_tokens, was_truncated) in zip(
             rows["question"], rows["answer"], completions, strict=True
         ):
             examples.append(
@@ -160,6 +204,7 @@ def evaluate_gsm8k(
                     completion=completion,
                     score=score_completion(completion, answer),
                     completion_tokens=completion_tokens,
+                    was_truncated=was_truncated,
                 )
             )
         progress.update(len(rows["question"]))
@@ -169,7 +214,10 @@ def evaluate_gsm8k(
 
 def _print_example(index: int, example: EvaluationExample) -> None:
     score = example.score
-    print(f"\n[{index}] correct={score.is_correct} format={score.has_valid_format}")
+    print(
+        f"\n[{index}] correct={score.is_correct} format={score.has_valid_format} "
+        f"truncated={example.was_truncated}"
+    )
     print(f"Question: {example.question}")
     print(f"Expected: {score.expected_answer!r}")
     print(f"Predicted: {score.predicted_answer!r}")
@@ -198,6 +246,29 @@ def run(args: Namespace) -> None:
     print(f"\nExact-answer accuracy: {correct}/{len(result.examples)} ({result.accuracy:.1%})")
     print(f"Valid #### format: {valid_format}/{len(result.examples)} ({result.format_rate:.1%})")
     print(f"Mean completion length: {result.mean_completion_tokens:.1f} tokens")
+    truncated = sum(example.was_truncated for example in result.examples)
+    print(f"Truncated completions: {truncated}/{len(result.examples)} ({result.truncation_rate:.1%})")
+
+    if args.output_json is not None:
+        output_path = Path(args.output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "model": args.model,
+            "adapter": args.adapter,
+            "dataset": args.dataset,
+            "dataset_config": args.dataset_config,
+            "split": args.split,
+            "validation_fraction": args.validation_fraction,
+            "split_seed": args.seed,
+            "decoding": {
+                "do_sample": False,
+                "max_new_tokens": args.max_new_tokens,
+                "generation_batch_size": args.generation_batch_size,
+            },
+            **result.to_dict(),
+        }
+        output_path.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"Saved evaluation to {output_path}")
 
     for index, example in enumerate(result.examples[: args.show_examples]):
         _print_example(index, example)
