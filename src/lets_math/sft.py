@@ -12,7 +12,7 @@ from typing import Any
 
 import torch
 from datasets import Dataset, DatasetDict
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -343,7 +343,9 @@ def _load_training_state(
         raise ValueError(
             f"{checkpoint_dir} has no training_state.pt; use checkpoint-last, not checkpoint-best"
         )
-    state = torch.load(state_path, map_location=device, weights_only=False)
+    # RNG state tensors must remain CPU ByteTensors. Optimizer.load_state_dict
+    # moves its parameter state to the corresponding model-parameter devices.
+    state = torch.load(state_path, map_location="cpu", weights_only=False)
     if state["seed"] != seed:
         raise ValueError(
             f"Checkpoint seed ({state['seed']}) does not match --seed ({seed})"
