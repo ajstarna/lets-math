@@ -2,7 +2,7 @@
 
 import argparse
 
-from . import data, evaluate, sft
+from . import data, evaluate, grpo, sft
 
 
 DEFAULT_DATASET = "openai/gsm8k"
@@ -84,6 +84,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sft_parser.add_argument("--wandb-run-name", default=None)
     sft_parser.set_defaults(func=sft.run)
+
+    grpo_parser = subparsers.add_parser("train-grpo", help="Run hand-rolled GRPO from an SFT adapter")
+    _add_data_arguments(grpo_parser)
+    grpo_parser.add_argument("--adapter", required=True, help="SFT LoRA adapter checkpoint")
+    grpo_parser.add_argument("--output-dir", required=True, help="Directory for GRPO checkpoints")
+    grpo_parser.add_argument("--batch-size", type=int, default=1)
+    grpo_parser.add_argument("--group-size", type=int, default=4)
+    grpo_parser.add_argument("--learning-rate", type=float, default=1e-5)
+    grpo_parser.add_argument("--max-steps", type=int, default=100, help="Total optimizer updates")
+    grpo_parser.add_argument("--updates-per-rollout", type=int, default=4)
+    grpo_parser.add_argument("--max-new-tokens", type=int, default=256)
+    grpo_parser.add_argument("--temperature", type=float, default=0.7)
+    grpo_parser.add_argument("--beta", type=float, default=0.04, help="Reference-policy KL coefficient")
+    grpo_parser.add_argument("--clip-epsilon", type=float, default=0.2)
+    grpo_parser.add_argument("--log-every", type=int, default=1)
+    grpo_parser.add_argument("--save-every", type=int, default=25)
+    grpo_parser.add_argument("--evaluate-every", type=int, default=25)
+    grpo_parser.add_argument("--evaluation-examples", type=int, default=100)
+    grpo_parser.add_argument("--generation-batch-size", type=int, default=8)
+    grpo_parser.add_argument("--wandb-project", default=None, help="Optional Weights & Biases project name")
+    grpo_parser.add_argument("--wandb-run-name", default=None)
+    grpo_parser.set_defaults(func=grpo.run)
 
     evaluate_parser = subparsers.add_parser(
         "evaluate", help="Greedily generate and exact-score GSM8K completions"

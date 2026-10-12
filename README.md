@@ -41,6 +41,18 @@ uv run lets-math train-sft \
 
 Add `--wandb-project lets-math` to log a run to Weights & Biases.
 
+Run GRPO from an SFT adapter (replace the adapter path with your completed SFT checkpoint):
+
+```bash
+uv run lets-math train-grpo \
+  --adapter outputs/sft/checkpoint-best-accuracy \
+  --output-dir outputs/grpo-smoke \
+  --max-steps 2 --evaluate-every 2 --evaluation-examples 2 \
+  --wandb-project lets-math --wandb-run-name grpo-smoke
+```
+
+GRPO samples four answers per prompt, rewards only exact trailing `#### <answer>` matches, and keeps the initial SFT LoRA weights as its KL reference.
+
 Evaluate a base checkpoint or a saved adapter with deterministic greedy decoding:
 
 ```bash
