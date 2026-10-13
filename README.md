@@ -1,8 +1,8 @@
 # lets-math
 
-Fine-tuning Qwen2.5-1.5B on GSM8K, then training it with GRPO and checked final answers.
+Exploring supervised fine-tuning and reinforcement learning for language models on verifiable math problems.
 
-I built the SFT and GRPO loops in PyTorch to understand what's happening inside training. Transformers and PEFT handle model loading, generation, and LoRA. All runs so far use one RTX 5070 Ti (16 GB).
+The first experiment compares base Qwen2.5-1.5B, SFT, and GRPO on GSM8K. The repository implements SFT and GRPO training loops in PyTorch, with Transformers and PEFT for model loading, generation, and LoRA. All runs so far use one RTX 5070 Ti (16 GB).
 
 ## Results
 
