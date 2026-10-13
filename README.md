@@ -1,67 +1,55 @@
 # lets-math
 
-A small, reproducible study of supervised fine-tuning (SFT) and Group Relative Policy Optimization (GRPO) on math problems with deterministic answer verification.
+Fine-tuning Qwen2.5-1.5B on GSM8K, then training it with GRPO and checked final answers.
 
-See [RESULTS.md](RESULTS.md) for the running experiment record.
+I built the SFT and GRPO loops in PyTorch to understand what's happening inside training. Transformers and PEFT handle model loading, generation, and LoRA. All runs so far use one RTX 5070 Ti (16 GB).
 
-## Research question
+## Results
 
-How much does outcome-supervised GRPO improve a small Qwen model over its base and SFT-only baselines, and does that improvement survive controlled distribution shifts?
+| Model | Exact-answer accuracy | Valid answer format |
+|---|---:|---:|
+| Base Qwen2.5-1.5B | 29.7% | 44.5% |
+| SFT, ~1 epoch | 71.0% | 100.0% |
+| SFT + GRPO, 400 updates | **74.9%** | 99.7% |
 
-## Intended experiment matrix
+Evaluated on 748 held-out validation examples with greedy decoding and a 512-token cap. Training uses the other 6,725 examples from a fixed GSM8K train split. The official test set is untouched.
 
-1. Base model evaluation.
-2. SFT on worked math solutions.
-3. SFT followed by GRPO with exact-answer reward.
-4. Small ablations: GRPO group size and KL coefficient.
+GRPO added 29 correct answers over SFT on the full validation split (+3.9 percentage points). See [RESULTS.md](RESULTS.md) for experiment details. GSM8K may be present in the base model's pretraining data, so these are benchmark adaptation results, not evidence of general reasoning ability.
 
-GSM8K is a useful baseline but is contamination-prone for modern models. The main generalization evidence should come from a generated math environment with held-out templates and difficulty ranges.
+## Implementation
 
-## Planned layout
+- **SFT:** completion-only loss, LoRA, gradient accumulation, validation, and resumable checkpoints.
+- **GRPO:** grouped rollouts, normalized advantages, clipped policy updates, and KL against a frozen SFT reference adapter.
+- **Rewards:** `+1` for an exact answer, `+0.05` for valid trailing `#### <answer>` format.
+- **Tracking:** local metrics and per-example evaluation JSON; optional W&B.
 
-- `src/lets_math/`: training, evaluation, data, reward, and experiment code.
-- `tests/`: verifier and training-loop tests.
-- `outputs/` (ignored): checkpoints, predictions, and run artifacts.
-- `data/` (ignored): downloaded/generated local data.
+## Getting started
 
-## Setup
+Uses Python 3.14 and PyTorch with CUDA 12.8 on Linux.
 
 ```bash
 uv sync --dev
-uv run lets-math inspect-data --show-token-stats
-```
+uv run pytest -q
+uv run lets-math inspect-data --show-token-stats --examples 0
 
-Run a small local SFT smoke test:
+# Train an SFT adapter
+uv run lets-math train-sft --output-dir outputs/sft --max-steps 840
 
-```bash
-uv run lets-math train-sft \
-  --output-dir outputs/sft-smoke \
-  --max-steps 2 --validate-every 1 --log-every 1
-```
-
-Add `--wandb-project lets-math` to log a run to Weights & Biases.
-
-Run GRPO from an SFT adapter (replace the adapter path with your completed SFT checkpoint):
-
-```bash
+# Run GRPO from that adapter
 uv run lets-math train-grpo \
-  --adapter outputs/sft/checkpoint-best-accuracy \
-  --output-dir outputs/grpo-smoke \
-  --max-steps 2 --evaluate-every 2 --evaluation-examples 2 \
-  --wandb-project lets-math --wandb-run-name grpo-smoke
+  --adapter outputs/sft/checkpoint-best \
+  --output-dir outputs/grpo \
+  --max-steps 400 --group-size 8 --updates-per-rollout 2
+
+# Evaluate the best GRPO adapter on the full validation split
+uv run lets-math evaluate \
+  --adapter outputs/grpo/checkpoint-best \
+  --examples 748 --max-new-tokens 512 --generation-batch-size 16 \
+  --show-examples 0 --output-json outputs/evals/grpo-validation.json
 ```
 
-GRPO samples four answers per prompt, rewards only exact trailing `#### <answer>` matches, and keeps the initial SFT LoRA weights as its KL reference.
+Omit `--adapter` for base-model evaluation. Checkpoints and run artifacts are local under ignored `outputs/`; trained adapters are not bundled. Use `--help` on each command for options.
 
-Evaluate a base checkpoint or a saved adapter with deterministic greedy decoding:
+## Code
 
-```bash
-uv run lets-math evaluate --examples 100
-uv run lets-math evaluate --adapter outputs/sft-smoke/checkpoint-best --examples 100
-```
-
-Optional Weights & Biases credentials belong in an ignored `.env` file.
-
-## Status
-
-Repository scaffold only. First implementation target: a strict final-answer extractor and verifier with tests.
+Under [`src/lets_math/`](src/lets_math/): `data.py` handles loading and splits, `sft.py` and `grpo.py` contain the training loops, `evaluate.py` generates and scores answers, and `answers.py` defines the final-answer parser.

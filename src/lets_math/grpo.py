@@ -22,6 +22,7 @@ class GRPOConfig:
     model_name: str
     adapter: str
     output_dir: str
+    resume_from_checkpoint: str | None = None
     batch_size: int = 1
     group_size: int = 4
     learning_rate: float = 1e-5
@@ -168,13 +169,105 @@ def _sample_groups(
     return sequences, attention_mask, completion_mask, completions, answers, truncated
 
 
-def _prompt_batches(dataset: Dataset, batch_size: int, seed: int):
-    epoch = 0
+def _prompt_batches(
+    dataset: Dataset,
+    batch_size: int,
+    seed: int,
+    start_epoch: int = 0,
+    start_batch_offset: int = 0,
+):
+    """Yield prompt batches and the reproducible position after each batch."""
+    epoch = start_epoch
+    batch_offset = start_batch_offset
     while True:
-        indices = torch.randperm(len(dataset), generator=torch.Generator().manual_seed(seed + epoch)).tolist()
-        for start in range(0, len(indices) - batch_size + 1, batch_size):
-            yield [dataset[index] for index in indices[start : start + batch_size]]
+        indices = torch.randperm(
+            len(dataset), generator=torch.Generator().manual_seed(seed + epoch)
+        ).tolist()
+        starts = range(0, len(indices) - batch_size + 1, batch_size)
+        for batch_index, start in enumerate(starts):
+            if batch_index < batch_offset:
+                continue
+            batch_offset = batch_index + 1
+            yield (
+                [dataset[index] for index in indices[start : start + batch_size]],
+                epoch,
+                batch_offset,
+            )
         epoch += 1
+        batch_offset = 0
+
+
+def _save_last_checkpoint(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizerBase,
+    optimizer: torch.optim.Optimizer,
+    output_dir: str,
+    optimizer_step: int,
+    epoch: int,
+    batch_offset: int,
+    seed: int,
+    best_accuracy: float,
+    reference: dict[str, torch.Tensor],
+) -> None:
+    """Save policy, optimizer, reference policy, RNG, and prompt-stream state."""
+    checkpoint_dir = Path(output_dir) / "checkpoint-last"
+    _save_adapter(model, tokenizer, checkpoint_dir)
+    state: dict[str, Any] = {
+        "optimizer": optimizer.state_dict(),
+        "optimizer_step": optimizer_step,
+        "epoch": epoch,
+        "batch_offset": batch_offset,
+        "seed": seed,
+        "best_accuracy": best_accuracy,
+        "reference": {name: value.detach().cpu().clone() for name, value in reference.items()},
+        "python_rng_state": random.getstate(),
+        "torch_rng_state": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda_rng_states"] = torch.cuda.get_rng_state_all()
+    torch.save(state, checkpoint_dir / "training_state.pt")
+    print(f"Saved resumable GRPO checkpoint to {checkpoint_dir}")
+
+
+def _load_training_state(
+    checkpoint_dir: str,
+    optimizer: torch.optim.Optimizer,
+    model: PreTrainedModel,
+    seed: int,
+) -> tuple[int, int, int, float, dict[str, torch.Tensor]]:
+    """Restore state saved by :func:`_save_last_checkpoint`."""
+    state_path = Path(checkpoint_dir) / "training_state.pt"
+    if not state_path.is_file():
+        raise ValueError(
+            f"{checkpoint_dir} has no training_state.pt; use a GRPO checkpoint-last directory"
+        )
+    # CPU loading preserves the CPU RNG ByteTensor needed by torch.set_rng_state.
+    state = torch.load(state_path, map_location="cpu", weights_only=False)
+    if state["seed"] != seed:
+        raise ValueError(
+            f"Checkpoint seed ({state['seed']}) does not match --seed ({seed})"
+        )
+    optimizer.load_state_dict(state["optimizer"])
+    parameters = dict(model.named_parameters())
+    reference = {
+        name: value.to(device=parameters[name].device, dtype=parameters[name].dtype)
+        for name, value in state["reference"].items()
+    }
+    if set(reference) != {name for name, parameter in model.named_parameters() if parameter.requires_grad}:
+        raise ValueError("Checkpoint reference parameters do not match the loaded GRPO adapter")
+    random.setstate(state["python_rng_state"])
+    torch.set_rng_state(state["torch_rng_state"])
+    if "cuda_rng_states" in state:
+        if not torch.cuda.is_available():
+            raise ValueError("Checkpoint contains CUDA RNG state, but CUDA is unavailable")
+        torch.cuda.set_rng_state_all(state["cuda_rng_states"])
+    return (
+        state["optimizer_step"],
+        state["epoch"],
+        state["batch_offset"],
+        state["best_accuracy"],
+        reference,
+    )
 
 
 def train_grpo(
@@ -217,35 +310,58 @@ def train_grpo(
         torch.cuda.manual_seed_all(config.seed)
     model.to(_device())
     model.config.use_cache = False
-    reference = {name: parameter.detach().clone() for name, parameter in model.named_parameters() if parameter.requires_grad}
-    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=config.learning_rate)
-    batches = _prompt_batches(train_dataset, config.batch_size, config.seed)
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=config.learning_rate,
+    )
     validation_dataset = validation_dataset.select(
         range(min(config.evaluation_examples, len(validation_dataset)))
     )
-    original_padding_side = tokenizer.padding_side
-    model.eval()
-    tokenizer.padding_side = "left"
-    try:
-        initial_accuracy = evaluate_gsm8k(
-            model,
-            tokenizer,
-            validation_dataset,
-            config.evaluation_max_new_tokens,
-            config.generation_batch_size,
-        ).accuracy
-    finally:
-        tokenizer.padding_side = original_padding_side
-    best_accuracy = initial_accuracy
-    _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-initial")
-    _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-best")
-    _append_metric(
-        config.output_dir,
-        {"step": 0, "event": "generation_validation", "accuracy": initial_accuracy},
+    if config.resume_from_checkpoint is not None:
+        step, epoch, batch_offset, best_accuracy, reference = _load_training_state(
+            config.resume_from_checkpoint, optimizer, model, config.seed
+        )
+        if step >= config.max_steps:
+            raise ValueError(
+                f"Checkpoint is already at step {step}, which is >= --max-steps {config.max_steps}"
+            )
+        print(f"Resumed GRPO at step {step}, epoch {epoch}, batch offset {batch_offset}")
+    else:
+        step = 0
+        epoch = 0
+        batch_offset = 0
+        reference = {
+            name: parameter.detach().clone()
+            for name, parameter in model.named_parameters()
+            if parameter.requires_grad
+        }
+        original_padding_side = tokenizer.padding_side
+        model.eval()
+        tokenizer.padding_side = "left"
+        try:
+            initial_accuracy = evaluate_gsm8k(
+                model,
+                tokenizer,
+                validation_dataset,
+                config.evaluation_max_new_tokens,
+                config.generation_batch_size,
+            ).accuracy
+        finally:
+            tokenizer.padding_side = original_padding_side
+        best_accuracy = initial_accuracy
+        _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-initial")
+        _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-best")
+        _append_metric(
+            config.output_dir,
+            {"step": 0, "event": "generation_validation", "accuracy": initial_accuracy},
+        )
+        if wandb_run is not None:
+            wandb_run.log({"generation/accuracy": initial_accuracy}, step=0)
+        print(f"GRPO initial generation accuracy: {initial_accuracy:.1%}")
+
+    batches = _prompt_batches(
+        train_dataset, config.batch_size, config.seed, epoch, batch_offset
     )
-    if wandb_run is not None:
-        wandb_run.log({"generation/accuracy": initial_accuracy}, step=0)
-    print(f"GRPO initial generation accuracy: {initial_accuracy:.1%}")
     start = perf_counter()
     rollout_count = (config.max_steps + config.updates_per_rollout - 1) // config.updates_per_rollout
     print(
@@ -254,9 +370,9 @@ def train_grpo(
         f"({rollout_count * config.batch_size * config.group_size} sampled completions maximum)"
     )
 
-    step = 0
+    last_saved_step = step
     while step < config.max_steps:
-        rows = next(batches)
+        rows, epoch, batch_offset = next(batches)
         (
             sequences,
             attention_mask,
@@ -343,10 +459,24 @@ def train_grpo(
                     best_accuracy = accuracy
                     _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-best")
 
-            if step % config.save_every == 0 or step == config.max_steps:
-                _save_adapter(model, tokenizer, Path(config.output_dir) / "checkpoint-last")
+        # Save only after all updates for this rollout. A checkpoint therefore
+        # always resumes by sampling the next prompt group, never mid-group.
+        if step - last_saved_step >= config.save_every or step == config.max_steps:
+            _save_last_checkpoint(
+                model,
+                tokenizer,
+                optimizer,
+                config.output_dir,
+                step,
+                epoch,
+                batch_offset,
+                config.seed,
+                best_accuracy,
+                reference,
+            )
+            last_saved_step = step
 
-    summary = {"final_step": config.max_steps, "best_generation_accuracy": best_accuracy, "runtime_seconds": perf_counter() - start}
+    summary = {"final_step": step, "best_generation_accuracy": best_accuracy, "runtime_seconds": perf_counter() - start}
     _write_summary(config.output_dir, summary)
     if wandb_run is not None:
         wandb_run.summary["generation/best_accuracy"] = best_accuracy
@@ -355,7 +485,8 @@ def train_grpo(
 def run(args: Namespace) -> None:
     """CLI entry point for GRPO from an SFT adapter."""
     config = GRPOConfig(
-        model_name=args.model, adapter=args.adapter, output_dir=args.output_dir, batch_size=args.batch_size,
+        model_name=args.model, adapter=args.adapter, output_dir=args.output_dir,
+        resume_from_checkpoint=args.resume_from_checkpoint, batch_size=args.batch_size,
         group_size=args.group_size, learning_rate=args.learning_rate, max_steps=args.max_steps,
         updates_per_rollout=args.updates_per_rollout, max_new_tokens=args.max_new_tokens,
         evaluation_max_new_tokens=args.evaluation_max_new_tokens,
@@ -371,7 +502,10 @@ def run(args: Namespace) -> None:
     from .sft import SFTConfig
 
     datasets = load_experiment_dataset(args)
-    model, tokenizer = load_lora_model(SFTConfig(model_name=config.model_name, resume_from_checkpoint=config.adapter))
+    policy_adapter = config.resume_from_checkpoint or config.adapter
+    model, tokenizer = load_lora_model(
+        SFTConfig(model_name=config.model_name, resume_from_checkpoint=policy_adapter)
+    )
     wandb_run = None
     if args.wandb_project:
         import wandb

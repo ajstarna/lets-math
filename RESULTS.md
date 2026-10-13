@@ -38,4 +38,31 @@ This document is the running, human-readable record of experiment results. Detai
 
 SFT substantially improves held-out exact-answer accuracy and makes output formatting fully reliable under this evaluation setup. It also produces shorter completions, which explains why the SFT evaluation ran faster than the base-model evaluation.
 
-The next primary comparison is SFT versus SFT + hand-rolled GRPO, using the same experiment-train prompt pool and the same held-out validation protocol.
+## SFT + GRPO
+
+| Condition | Exact answer accuracy | Valid `####` format | Mean completion tokens | Truncation rate |
+|---|---:|---:|---:|---:|
+| SFT | 531 / 748 (71.0%) | 748 / 748 (100.0%) | 121.2 | 0.0% |
+| SFT + GRPO | 560 / 748 (**74.9%**) | 746 / 748 (99.7%) | 124.0 | 2 / 748 (0.3%) |
+
+GRPO improved full-validation accuracy by **29 answers / 3.9 percentage points** over SFT in this single run. Repeated seeds and ablations are still needed to establish robustness.
+
+### GRPO configuration
+
+- Initialization: the one-epoch SFT loss-selected adapter above.
+- 400 optimizer updates; 2 updates per rollout; 200 training prompts.
+- Prompt batch size 1; group size 8; 1,600 sampled completions.
+- Rollout cap 384 tokens; sampling temperature 0.7.
+- Learning rate `1e-5`; KL coefficient 0.04; clip epsilon 0.2; gradient norm cap 1.0.
+- Reward: `+1` for exact correctness and `+0.05` for valid final-answer format.
+- Reference policy: frozen initial SFT LoRA weights.
+- Checkpoint selection: greedy accuracy on the fixed first 100 validation examples, every 100 updates, with a 512-token cap and generation batch size 16.
+- Final probe accuracy: 74%, versus 68% before GRPO. Full validation evaluated the best saved adapter.
+- Training wall time: 19m 25s on an RTX 5070 Ti.
+- This run preceded GRPO resumable-state support; its last checkpoint is adapter-only.
+
+### Local detailed artifact
+
+- `outputs/evals/grpo-qwen2.5-1.5b-g8-400-validation-748-greedy-512-batch16.json`
+
+The official test set remains untouched. Full validation includes the 100 examples used for checkpoint selection, so it is a development comparison, not an independent final test.

@@ -87,8 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     grpo_parser = subparsers.add_parser("train-grpo", help="Run hand-rolled GRPO from an SFT adapter")
     _add_data_arguments(grpo_parser)
-    grpo_parser.add_argument("--adapter", required=True, help="SFT LoRA adapter checkpoint")
+    grpo_parser.add_argument("--adapter", required=True, help="Initial SFT LoRA adapter checkpoint")
     grpo_parser.add_argument("--output-dir", required=True, help="Directory for GRPO checkpoints")
+    grpo_parser.add_argument(
+        "--resume-from-checkpoint",
+        default=None,
+        help="Resumable GRPO checkpoint-last directory from a prior GRPO run",
+    )
     grpo_parser.add_argument("--batch-size", type=int, default=1)
     grpo_parser.add_argument("--group-size", type=int, default=4)
     grpo_parser.add_argument("--learning-rate", type=float, default=1e-5)
