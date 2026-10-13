@@ -7,7 +7,7 @@ from typing import Any
 from datasets import Dataset, DatasetDict, load_dataset
 from transformers import AutoTokenizer
 
-from .sft import token_length_statistics
+from .sft import completion_length_statistics, token_length_statistics
 
 
 def _format_example(example: Mapping[str, Any]) -> str:
@@ -40,14 +40,23 @@ def _print_dataset_details(dataset: DatasetDict) -> None:
 def _print_token_statistics(dataset: Dataset, model: str, max_length: int) -> None:
     print(f"\nLoading tokenizer from {model}...")
     tokenizer = AutoTokenizer.from_pretrained(model)
-    stats = token_length_statistics(dataset, tokenizer, max_length)
-    print(f"SFT token lengths (prompt + completion + EOS; max length {max_length}):")
+    sequence_stats = token_length_statistics(dataset, tokenizer, max_length)
+    completion_stats = completion_length_statistics(dataset, tokenizer, max_length)
+    print(f"SFT sequence lengths (prompt + completion + EOS; max length {max_length}):")
     print(
-        f"  examples: {stats.example_count:,} | min: {stats.minimum} | "
-        f"p50: {stats.median} | p90: {stats.p90} | p95: {stats.p95} | "
-        f"p99: {stats.p99} | max: {stats.maximum}"
+        f"  examples: {sequence_stats.example_count:,} | min: {sequence_stats.minimum} | "
+        f"p50: {sequence_stats.median} | p90: {sequence_stats.p90} | p95: {sequence_stats.p95} | "
+        f"p99: {sequence_stats.p99} | max: {sequence_stats.maximum}"
     )
-    print(f"  fitting max length: {stats.within_max_length:,}/{stats.example_count:,}")
+    print(
+        f"  fitting max length: {sequence_stats.within_max_length:,}/{sequence_stats.example_count:,}"
+    )
+    print("Gold completion lengths (solution + final answer + EOS):")
+    print(
+        f"  min: {completion_stats.minimum} | p50: {completion_stats.median} | "
+        f"p90: {completion_stats.p90} | p95: {completion_stats.p95} | "
+        f"p99: {completion_stats.p99} | max: {completion_stats.maximum}"
+    )
 
 
 def load_experiment_dataset(args: Namespace) -> DatasetDict:

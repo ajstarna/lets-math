@@ -59,7 +59,7 @@ class SFTConfig:
 
 @dataclass(frozen=True)
 class TokenLengthStatistics:
-    """Summary of tokenized prompt-plus-completion sequence lengths."""
+    """Summary of a collection of token sequence lengths."""
 
     example_count: int
     minimum: int
@@ -102,19 +102,12 @@ def tokenize_sft_example(
     }
 
 
-def token_length_statistics(
-    dataset: Dataset, tokenizer: PreTrainedTokenizerBase, max_length: int
-) -> TokenLengthStatistics:
-    """Measure lengths of the exact sequences that SFT would train on."""
-    if len(dataset) == 0:
+def _summarize_token_lengths(lengths: list[int], max_length: int) -> TokenLengthStatistics:
+    if not lengths:
         raise ValueError("Cannot compute token statistics for an empty dataset")
     if max_length < 1:
         raise ValueError("max_length must be positive")
-
-    lengths = sorted(
-        len(tokenize_sft_example(format_gsm8k_example(example), tokenizer)["input_ids"])
-        for example in dataset
-    )
+    lengths.sort()
 
     def percentile(percent: float) -> int:
         return lengths[math.ceil(percent * len(lengths)) - 1]
@@ -128,6 +121,37 @@ def token_length_statistics(
         p99=percentile(0.99),
         maximum=lengths[-1],
         within_max_length=sum(length <= max_length for length in lengths),
+    )
+
+
+def token_length_statistics(
+    dataset: Dataset, tokenizer: PreTrainedTokenizerBase, max_length: int
+) -> TokenLengthStatistics:
+    """Measure prompt-plus-completion lengths of exact SFT training sequences."""
+    return _summarize_token_lengths(
+        [
+            len(tokenize_sft_example(format_gsm8k_example(example), tokenizer)["input_ids"])
+            for example in dataset
+        ],
+        max_length,
+    )
+
+
+def completion_length_statistics(
+    dataset: Dataset, tokenizer: PreTrainedTokenizerBase, max_length: int
+) -> TokenLengthStatistics:
+    """Measure gold completion-label lengths, including the terminal EOS token."""
+    return _summarize_token_lengths(
+        [
+            sum(
+                label != -100
+                for label in tokenize_sft_example(
+                    format_gsm8k_example(example), tokenizer
+                )["labels"]
+            )
+            for example in dataset
+        ],
+        max_length,
     )
 
 

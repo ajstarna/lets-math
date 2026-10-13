@@ -94,10 +94,25 @@ def build_parser() -> argparse.ArgumentParser:
     grpo_parser.add_argument("--learning-rate", type=float, default=1e-5)
     grpo_parser.add_argument("--max-steps", type=int, default=100, help="Total optimizer updates")
     grpo_parser.add_argument("--updates-per-rollout", type=int, default=4)
-    grpo_parser.add_argument("--max-new-tokens", type=int, default=256)
+    grpo_parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=384,
+        help="Maximum sampled rollout completion length; chosen from gold train targets",
+    )
+    grpo_parser.add_argument(
+        "--evaluation-max-new-tokens",
+        type=int,
+        default=512,
+        help="Maximum greedy validation completion length",
+    )
     grpo_parser.add_argument("--temperature", type=float, default=0.7)
     grpo_parser.add_argument("--beta", type=float, default=0.04, help="Reference-policy KL coefficient")
     grpo_parser.add_argument("--clip-epsilon", type=float, default=0.2)
+    grpo_parser.add_argument(
+        "--format-reward", type=float, default=0.05, help="Bonus for valid trailing #### answer format"
+    )
+    grpo_parser.add_argument("--max-grad-norm", type=float, default=1.0)
     grpo_parser.add_argument("--log-every", type=int, default=1)
     grpo_parser.add_argument("--save-every", type=int, default=25)
     grpo_parser.add_argument("--evaluate-every", type=int, default=25)

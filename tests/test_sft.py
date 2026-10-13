@@ -1,6 +1,7 @@
 from datasets import Dataset
 
 from lets_math.sft import (
+    completion_length_statistics,
     format_gsm8k_example,
     token_length_statistics,
     tokenize_sft_example,
@@ -49,4 +50,20 @@ def test_reports_lengths_for_the_formatted_sft_sequences():
     assert stats.example_count == 2
     assert stats.minimum <= stats.median <= stats.maximum
     assert stats.p90 <= stats.p95 <= stats.p99 == stats.maximum
+    assert stats.within_max_length == 2
+
+
+def test_reports_completion_only_lengths():
+    dataset = Dataset.from_list(
+        [
+            {"question": "One?", "answer": "#### 1"},
+            {"question": "Two?", "answer": "Reasoning\n#### 2"},
+        ]
+    )
+
+    stats = completion_length_statistics(dataset, FakeTokenizer(), max_length=200)
+
+    # Completion labels contain only the answer text plus the EOS token.
+    assert stats.minimum == len("#### 1") + 1
+    assert stats.maximum == len("Reasoning\n#### 2") + 1
     assert stats.within_max_length == 2
